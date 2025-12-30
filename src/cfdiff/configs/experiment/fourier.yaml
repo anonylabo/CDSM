@@ -1,0 +1,7 @@
+defaults:
+  - /datamodule: fourier
+  - /model: conditional_score
+  - /trainer: default
+  - /sampler: default
+
+name: fourier

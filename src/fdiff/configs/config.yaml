@@ -1,0 +1,24 @@
+defaults:
+- /scheduler: vpsde
+- experiment: unconditional
+- _self_
+random_seed: 42
+run_mode: train_sample
+checkpoint_path: null
+output_dir: null
+callbacks:
+  epoch_metrics:
+    enabled: false
+    best_metric: null
+    best_metric_mode: min
+    best_metric_filename: best-metric
+    best_metric_save_last: true
+    max_batches: 1
+    max_windows: 32
+    log_prefix: epoch
+    compute_fourier: false
+    sampler:
+      num_diffusion_steps: null
+      sample_batch_size: null
+    best_metrics: []
+    num_mc_samples: 1

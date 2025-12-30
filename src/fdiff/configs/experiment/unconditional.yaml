@@ -1,0 +1,7 @@
+defaults:
+  - /datamodule: unconditional
+  - /model: score
+  - /sampler: default
+  - /trainer: default
+
+name: unconditional

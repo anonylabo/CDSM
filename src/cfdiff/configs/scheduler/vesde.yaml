@@ -1,0 +1,7 @@
+_target_: cfdiff.utils.sde.VEScheduler
+sigma_min: 0.0005
+sigma_max: 0.5
+fourier_noise_scaling: false
+eps: 1.0e-5
+temporal_noise_ramp: null    # e.g., "linear", "exp"; null keeps original uniform noise
+temporal_ramp_max: 1.0       # max scale for ramp (only used if temporal_noise_ramp is set)

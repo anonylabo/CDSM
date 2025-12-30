@@ -1,0 +1,42 @@
+defaults:
+  - _self_
+
+random_seed: 42
+run_mode: window_baseline
+output_dir: null
+
+datamodule:
+  _target_: cfdiff.dataloaders.conditional_gluonts.ConditionalGluonTSJsonDatamodule
+  data_dir: ${oc.env:CFDIFF_DATA_DIR,${hydra:runtime.cwd}/data}
+  batch_size: 32
+  context_len: 30
+  pred_len: 15
+  stride: 1
+  val_ratio: 0.3
+  train_val_gap: -1
+  val_test_gap: -1
+  standardize: true
+  num_workers: 0
+  pin_memory: false
+  jsonl_train: null
+  jsonl_test: null
+  fourier_transform: false
+  estimate_sliding_cov: true
+  sliding_cov_window: 8
+  sliding_cov_eps: 1.0e-6
+  align_tail_windows: true
+
+baseline:
+  # window_uncond | window_local | window_factor
+  method: window_uncond
+  method_kwargs:
+    factor_rank: 4
+  window_index: 0   # -1 means all windows (val+test if include_val=true)
+  use_val_for_cov: false  # include validation windows when fitting the covariance
+  save_csv: true
+  save_pt: true
+  include_val: false
+  tag: null
+  repeats: 1
+
+tags: []

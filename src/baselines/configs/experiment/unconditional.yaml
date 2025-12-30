@@ -1,0 +1,5 @@
+datamodule:
+  _target_: fdiff.dataloaders.unconditional_gluonts.UnconditionalGluonTSJsonDatamodule
+  fourier_transform: false
+baseline:
+  tag: null

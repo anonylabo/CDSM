@@ -1,0 +1,38 @@
+[project]
+name = "conditional-fourier-diffusion"
+version = "0.1.0"
+description = "Standalone conditional Fourier diffusion experiment"
+authors = [{name = "Auto-generated"}]
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "pytorch-lightning>=2.4",
+  "torch",
+  "hydra-core",
+  "omegaconf",
+  "tqdm",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = [
+  "cfdiff",
+  "cfdiff.dataloaders",
+  "cfdiff.models",
+  "cfdiff.sampling",
+  "cfdiff.utils",
+  "cfdiff.eval",
+  "cfdiff.stats",
+  "fdiff",
+  "fdiff.cmd",
+  "fdiff.dataloaders",
+  "fdiff.models",
+  "fdiff.sampling",
+  "fdiff.schedulers",
+  "fdiff.utils",
+]

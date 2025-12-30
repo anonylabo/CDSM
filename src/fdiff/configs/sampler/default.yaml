@@ -1,0 +1,5 @@
+sample_batch_size: 64
+num_diffusion_steps: 1000
+num_mc_samples: 1
+save_mc_artifacts: false
+sample_repeats: 1

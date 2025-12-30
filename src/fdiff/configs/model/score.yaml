@@ -1,0 +1,25 @@
+_target_: fdiff.models.score_model.ScoreModel
+_partial_: true
+n_channels: null
+max_len: null
+noise_scheduler: ${scheduler}
+fourier_noise_scaling: true
+d_model: 60
+num_layers: 3
+n_head: 12
+num_training_steps: 1000
+lr_max: 1.0e-3
+lr_scheduler_type: cosine_warmup
+lr_scheduler_kwargs:
+  total_steps: ${..num_training_steps}
+  warmup_steps: null
+  interval: step
+likelihood_weighting: false
+# Timestep sampling controls (override via CLI/notebook)
+t_sampling_mode: uniform   # options: uniform, beta, power
+t_beta_alpha: 2.0
+t_beta_beta: 5.0
+t_power_gamma: 2.0
+t_importance_correction: false
+backbone: transformer
+mlp_hidden_dim: 512

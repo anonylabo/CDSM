@@ -1,0 +1,2 @@
+sample_batch_size: 64
+num_diffusion_steps: 1000

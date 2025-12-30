@@ -1,0 +1,7 @@
+defaults:
+  - /datamodule: time
+  - /model: conditional_score
+  - /trainer: default
+  - /sampler: default
+
+name: time

@@ -1,0 +1,7 @@
+defaults:
+  - /datamodule: time
+  - /model: timegrad
+  - /trainer: default
+  - /sampler: default
+
+name: timegrad

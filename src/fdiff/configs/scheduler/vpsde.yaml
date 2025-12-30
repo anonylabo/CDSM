@@ -1,0 +1,5 @@
+_target_: fdiff.schedulers.sde.VPScheduler
+beta_min: 0.1
+beta_max: 20.0
+fourier_noise_scaling: false
+eps: 1.0e-5

@@ -1,0 +1,25 @@
+#
+# Additional best-metric configuration for Fourier metrics.
+# These entries assume `callbacks.epoch_metrics.compute_fourier=true`
+# so that the logger produces the corresponding keys.
+#
+- metric: fourier_time_sliced_wasserstein_mean
+  mode: min
+  filename: best-fourier_time_sw_mean
+  save_last: false
+- metric: fourier_time_marginal_wasserstein_mean
+  mode: min
+  filename: best-fourier_time_mw_mean
+  save_last: false
+- metric: fourier_freq_sliced_wasserstein_mean
+  mode: min
+  filename: best-fourier_freq_sw_mean
+  save_last: false
+- metric: fourier_freq_marginal_wasserstein_mean
+  mode: min
+  filename: best-fourier_freq_mw_mean
+  save_last: false
+- metric: fourier_spectral_marginal_wasserstein_mean
+  mode: min
+  filename: best-fourier_spectral_mw_mean
+  save_last: false

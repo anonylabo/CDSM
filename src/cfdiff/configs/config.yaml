@@ -1,0 +1,25 @@
+defaults:
+- /scheduler: vpsde
+- experiment: time
+- _self_
+random_seed: 42
+run_mode: train_sample
+checkpoint_path: null
+output_dir: null
+callbacks:
+  epoch_metrics:
+    enabled: true
+    compute_fourier: true
+    num_mc_samples: 1
+    save_mc_artifacts: false
+    max_batches: 1
+    max_windows: 32
+    log_prefix: epoch
+    sampler:
+      num_diffusion_steps: null
+      sample_batch_size: null
+    best_metrics: []
+    best_metric: matrix_cov_fro
+    best_metric_mode: min
+    best_metric_filename: best-matrix_cov_fro
+    best_metric_save_last: true

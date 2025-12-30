@@ -1,0 +1,26 @@
+_target_: timegrad_baseline.factory.timegrad_partial
+_partial_: true
+n_channels: null
+sequence_len: null
+pred_len: null
+pred_len_time: null
+context_len_time: null
+target_channels: null
+noise_scheduler: ${scheduler}
+
+# LSTM backbone defaults (can be overridden via CLI)
+d_model: 128
+num_layers: 4
+n_head: 8        # kept for API parity; unused by LSTM
+dropout: 0.0
+lr: 1.0e-3
+weight_decay: 0.0
+likelihood_weighting: false
+lambda_mean: 0.0
+lambda_cov: 0.0
+lambda_corr: 0.0
+lambda_spectral: 0.0
+use_asset_encoder: false
+backbone: lstm
+mlp_hidden_dim: 512
+

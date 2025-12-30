@@ -1,0 +1,32 @@
+_target_: cfdiff.models.score_model.ScoreModel
+_partial_: true
+n_channels: null
+sequence_len: null
+pred_len: null
+pred_len_time: null
+context_len_time: null
+target_channels: null
+noise_scheduler: ${scheduler}
+d_model: 128
+num_layers: 4
+n_head: 8
+dropout: 0.0
+lr: 1.0e-3
+weight_decay: 0.0
+lr_scheduler_type: none   # options: none, cosine, cosine_warmup
+lr_scheduler_kwargs: {}
+likelihood_weighting: false
+# Timestep sampling controls (override in notebook/CLI as needed)
+t_sampling_mode: uniform   # options: uniform, beta, power
+t_beta_alpha: 2.0
+t_beta_beta: 5.0
+t_power_gamma: 2.0
+t_importance_correction: false
+lambda_mean: 0.0
+lambda_cov: 0.0
+lambda_corr: 0.0
+lambda_spectral: 0.0
+lambda_sliding_cov: 0.0
+use_asset_encoder: true
+backbone: transformer
+mlp_hidden_dim: 512

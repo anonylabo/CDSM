@@ -1,0 +1,22 @@
+defaults:
+  - datamodule: time
+  - _self_
+
+random_seed: 42
+run_mode: baseline
+output_dir: null
+
+baseline:
+  method: sample_cov
+  method_kwargs: {}
+  window_index: 0
+  save_csv: true
+  save_pt: true
+  metric_name: matrix_cov_fro
+  nan_policy: raise
+  tag: null
+  include_val: false
+  repeats: 1
+  show_progress: false
+
+tags: []

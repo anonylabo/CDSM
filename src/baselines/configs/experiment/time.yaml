@@ -1,0 +1,5 @@
+datamodule:
+  _target_: cfdiff.dataloaders.conditional_gluonts.ConditionalGluonTSJsonDatamodule
+  fourier_transform: false
+baseline:
+  tag: null

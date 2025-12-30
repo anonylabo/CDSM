@@ -1,0 +1,16 @@
+_target_: fdiff.dataloaders.unconditional_gluonts.UnconditionalGluonTSJsonDatamodule
+data_dir: ${oc.env:CFDIFF_DATA_DIR,${hydra:runtime.cwd}/data}
+batch_size: 32
+context_len: 60
+pred_len: 30
+stride: 1
+val_ratio: 0.3
+train_val_gap: -1
+val_test_gap: -1
+standardize: true
+num_workers: 0
+pin_memory: false
+jsonl_train: null
+jsonl_test: null
+fourier_transform: false
+align_tail_windows: true
