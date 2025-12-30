@@ -3,6 +3,5 @@ assets/
 notebooks/.ipynb_checkpoints/
 *.egg-info/
 .venv/
-ishares/
 __pycache__/
 *.pyc
