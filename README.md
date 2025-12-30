@@ -66,24 +66,6 @@ conda run -n baselines python src/baselines/cmd/run.py \
   baseline.window_index=-1 \
   baseline.save_csv=true baseline.save_pt=true
 ```
-Replace `baseline.method` with `ledoit_wolf` or `riskmetrics` for the other baselines. The new `include_val=true` flag ensures the saved `winXXXX` files use the same global indices (0–47 validation, 48–159 test) as the diffusion runs.
-
-Additional baselines from *A Deep Learning Framework for Medium-Term Covariance Forecasting* are wired into the same CLI:
-
-- `baseline.method=ewma` for the plain exponential smoothing baseline (RiskMetrics-style, `lam` in `method_kwargs`).
-- `baseline.method=ccc_garch` to fit per-asset GARCH(1,1) with a constant correlation matrix; the runner now defaults `method_kwargs.horizon` to `${datamodule.pred_len}` so forecasts align with the target window.
-- `baseline.method=cab` to train the CNN–BiLSTM covariance model on the datamodule's training split and evaluate on validation+test with the same preprocessing. Example:
-  ```bash
-  conda run -n baselines python src/baselines/cmd/run.py \
-    +experiment=time \
-    datamodule.data_dir=$CFDIFF_DATA_DIR datamodule.context_len=60 datamodule.pred_len=30 \
-    baseline.method=cab \
-    baseline.method_kwargs.lookback_window=${datamodule.context_len} \
-    baseline.method_kwargs.cov_window=8 \
-    baseline.method_kwargs.epochs=5 \
-    baseline.method_kwargs.device=cuda
-  ```
-  Keep `fourier_transform=false` so the CAB baseline sees time-domain windows; the runner handles standardisation, training split usage, and the usual metrics/CSV/PT dumps so outputs stay aligned with the diffusion experiments.
 
 ## 5. Plotting / Metrics
 See `notebooks/paper.ipynb` for the exact commands. Common scripts include:
