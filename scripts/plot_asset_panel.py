@@ -67,6 +67,17 @@ def parse_args() -> argparse.Namespace:
         help="List of forecast window indices to visualise (e.g., 0 1 2).",
     )
     parser.add_argument(
+        "--window-stage",
+        type=str,
+        choices=["combined", "val", "test"],
+        default="combined",
+        help=(
+            "Interpret --windows as indices within a stage. "
+            "'combined' uses the raw indices, while 'val'/'test' offset by the "
+            "validation window count reported in samples.pt (if available)."
+        ),
+    )
+    parser.add_argument(
         "--models",
         nargs="+",
         metavar="LABEL|RUN_DIR|[SAMPLE_TAG]",
@@ -132,6 +143,33 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If run_dir/sample_tag points to a batch directory containing multiple sub-runs, "
         "aggregate their predictions by mean/std and plot mean with a shaded band.",
+    )
+    parser.add_argument(
+        "--single-repeat",
+        action="store_true",
+        help="If set, select a single repeat payload when --batch-aggregate is used.",
+    )
+    parser.add_argument(
+        "--repeat-index",
+        type=int,
+        default=0,
+        help="Index of the repeat to select when --single-repeat is set (default: 0).",
+    )
+    parser.add_argument(
+        "--single-trajectory",
+        action="store_true",
+        help="If set, select a single trajectory index from each payload.",
+    )
+    parser.add_argument(
+        "--trajectory-index",
+        type=int,
+        default=0,
+        help="Index of the trajectory to select when --single-trajectory is set (default: 0).",
+    )
+    parser.add_argument(
+        "--hide-context",
+        action="store_true",
+        help="If set, do not plot the context window (only forecast window is shown).",
     )
     return parser.parse_args()
 
@@ -287,10 +325,12 @@ def load_samples(run_dir: Path, sample_tag: Optional[str]) -> Dict[str, np.ndarr
     truth = _to_np(data["truth"])
     context_raw = data.get("context")
     context_np = _to_np(context_raw) if context_raw is not None else None
+    stage_counts = data.get("window_stage_counts")
     return {
         "samples": samples,
         "truth": truth,
         "context": context_np,
+        "window_stage_counts": stage_counts,
     }
 
 
@@ -336,11 +376,13 @@ def load_model_payloads(run_dir: Path, sample_tag: Optional[str], batch_aggregat
             if isinstance(x, torch.Tensor):
                 return x.cpu().numpy()
             return np.asarray(x)
+        stage_counts = data.get("window_stage_counts")
         payloads.append(
             {
                 "samples": _to_np(data["samples"]),
                 "truth": _to_np(data["truth"]),
                 "context": _to_np(data.get("context")) if data.get("context") is not None else None,
+                "window_stage_counts": stage_counts,
             }
         )
     return payloads
@@ -354,6 +396,7 @@ def aggregate_payloads(payloads: Sequence[Dict[str, np.ndarray]]) -> Dict[str, n
             "samples_std": None,
             "truth": payload["truth"],
             "context": payload["context"],
+            "window_stage_counts": payload.get("window_stage_counts"),
         }
     samples_stack = np.stack([p["samples"] for p in payloads], axis=0)  # (R, W, P, A)
     mean = samples_stack.mean(axis=0)
@@ -365,6 +408,7 @@ def aggregate_payloads(payloads: Sequence[Dict[str, np.ndarray]]) -> Dict[str, n
         "samples_std": std,
         "truth": base["truth"],
         "context": base["context"],
+        "window_stage_counts": base.get("window_stage_counts"),
     }
 
 
@@ -414,6 +458,21 @@ def main() -> None:
     datasets = {}
     for label, (path, sample_tag) in model_specs.items():
         payloads = load_model_payloads(path, sample_tag, batch_aggregate=args.batch_aggregate)
+        if args.batch_aggregate and args.single_repeat and len(payloads) > 1:
+            idx = args.repeat_index % len(payloads)
+            payloads = [payloads[idx]]
+        if args.single_trajectory:
+            if not payloads:
+                raise RuntimeError(f"No trajectories found for {label} at {path}.")
+            def select_trajectory(payload, idx):
+                out = dict(payload)
+                for key in ("samples", "truth"):
+                    arr = out.get(key)
+                    if isinstance(arr, np.ndarray) and arr.ndim == 4:
+                        out[key] = arr[idx]
+                return out
+
+            payloads = [select_trajectory(p, args.trajectory_index) for p in payloads]
         datasets[label] = aggregate_payloads(payloads)
 
     # Fallback context for models without explicit context stored.
@@ -466,12 +525,42 @@ def main() -> None:
     else:
         asset_indices = list(range(args.asset_offset, args.asset_offset + args.assets))
 
-    window_indices = args.windows if args.windows is not None else [args.window_index]
+    raw_window_indices = args.windows if args.windows is not None else [args.window_index]
+    # Determine window index offset based on stage counts (if provided).
+    stage_counts = None
+    for payload in datasets.values():
+        if payload.get("window_stage_counts") is not None:
+            stage_counts = payload.get("window_stage_counts")
+            break
+    window_offset = 0
+    stage_label = None
+    if args.window_stage != "combined":
+        if stage_counts is None:
+            raise RuntimeError(
+                "window_stage_counts not found in samples.pt; cannot use --window-stage val/test."
+            )
+        val_count = int(stage_counts.get("val", 0))
+        test_count = int(stage_counts.get("test", 0))
+        if args.window_stage == "val":
+            stage_label = "Val"
+            max_count = val_count
+            window_offset = 0
+        else:
+            stage_label = "Test"
+            max_count = test_count
+            window_offset = val_count
+        for w in raw_window_indices:
+            if w < 0 or (max_count and w >= max_count):
+                raise IndexError(f"{args.window_stage} window index {w} outside [0, {max_count - 1}]")
+    window_indices = [w + window_offset for w in raw_window_indices]
+    window_display = list(raw_window_indices)
     context_len, pred_len, panel = prepare_panel(
         datasets=datasets,
         window_indices=window_indices,
         asset_indices=asset_indices,
     )
+    plot_context = not args.hide_context
+    plot_context_len = context_len if plot_context else 0
 
     n_cols = len(window_indices) if args.overlay_models else len(model_specs) * len(window_indices)
     fig_width = args.panel_size[0] * n_cols
@@ -493,7 +582,11 @@ def main() -> None:
 
     if args.overlay_models:
         for col, (widx, ax_column) in enumerate(zip(window_indices, axes.T)):
-            title = f"Window {widx}"
+            display_idx = window_display[col]
+            if stage_label:
+                title = f"{stage_label} window {display_idx}"
+            else:
+                title = f"Window {display_idx}"
             for row, ax in enumerate(ax_column):
                 asset_idx = asset_indices[row]
                 n_assets = len(asset_indices)
@@ -511,9 +604,21 @@ def main() -> None:
 
                 context = select(ref_data["context"])
                 truth = select(ref_data["truth"])
-                if context is not None:
-                    ax.plot(context_x, context, color="lightgray", linewidth=1.5, label="context" if col == 0 and row == 0 else None)
-                ax.plot(target_x, truth, color="black", linewidth=1.5, label="truth" if col == 0 and row == 0 else None)
+                if plot_context and context is not None:
+                    ax.plot(
+                        context_x,
+                        context,
+                        color="lightgray",
+                        linewidth=1.5,
+                        label="context" if col == 0 and row == 0 else None,
+                    )
+                ax.plot(
+                    target_x,
+                    truth,
+                    color="black",
+                    linewidth=1.5,
+                    label="Ground Truth" if col == 0 and row == 0 else None,
+                )
 
                 for m_idx, label in enumerate(model_specs.keys()):
                     data = panel[(widx, label)]
@@ -531,8 +636,11 @@ def main() -> None:
                             linewidth=0.0,
                         )
 
-                ax.axvline(x=-0.5, color="gray", linewidth=1.0, linestyle="--")
-                ax.set_xlim(-context_len, pred_len - 1)
+                if plot_context:
+                    ax.axvline(x=-0.5, color="gray", linewidth=1.0, linestyle="--")
+                    ax.set_xlim(-plot_context_len, pred_len - 1)
+                else:
+                    ax.set_xlim(0, pred_len - 1)
 
                 if col == 0:
                     label = asset_labels[asset_idx] if asset_labels is not None else f"Asset {asset_idx}"
@@ -540,7 +648,7 @@ def main() -> None:
                 if row == 0:
                     ax.set_title(title, fontsize=12)
                 if row == len(asset_indices) - 1:
-                    ax.set_xlabel("Steps relative to forecast start")
+                    ax.set_xlabel("Steps relative to forecast start" if plot_context else "Forecast step")
     else:
         columns = []
         for w in window_indices:
@@ -548,7 +656,11 @@ def main() -> None:
                 columns.append((w, label))
 
         for col, ((widx, label), ax_column) in enumerate(zip(columns, axes.T)):
-            title = f"{label} (win {widx})"
+            display_idx = window_display[col // len(model_specs)] if window_display else widx
+            if stage_label:
+                title = f"{label} ({stage_label.lower()} win {display_idx})"
+            else:
+                title = f"{label} (win {display_idx})"
             color = colors[col % len(colors)]
             data = panel[(widx, label)]
             for row, ax in enumerate(ax_column):
@@ -567,9 +679,9 @@ def main() -> None:
                 pred = select(data["pred"])
                 pred_std = select(data.get("pred_std"))
 
-                if context is not None:
+                if plot_context and context is not None:
                     ax.plot(context_x, context, color="lightgray", linewidth=1.5, label="context")
-                ax.plot(target_x, truth, color="black", linewidth=1.5, label="truth")
+                ax.plot(target_x, truth, color="black", linewidth=1.5, label="Ground Truth")
                 ax.plot(target_x, pred, color=color, linewidth=1.5, label="prediction")
                 if pred_std is not None:
                     ax.fill_between(
@@ -580,8 +692,11 @@ def main() -> None:
                         alpha=0.2,
                         linewidth=0.0,
                     )
-                ax.axvline(x=-0.5, color="gray", linewidth=1.0, linestyle="--")
-                ax.set_xlim(-context_len, pred_len - 1)
+                if plot_context:
+                    ax.axvline(x=-0.5, color="gray", linewidth=1.0, linestyle="--")
+                    ax.set_xlim(-plot_context_len, pred_len - 1)
+                else:
+                    ax.set_xlim(0, pred_len - 1)
 
                 if col == 0:
                     label = asset_labels[asset_idx] if asset_labels is not None else f"Asset {asset_idx}"
@@ -591,7 +706,7 @@ def main() -> None:
                     ax.set_title(title, fontsize=12)
 
                 if row == len(asset_indices) - 1:
-                    ax.set_xlabel("Steps relative to forecast start")
+                    ax.set_xlabel("Steps relative to forecast start" if plot_context else "Forecast step")
 
     # Shared legend (use the first axis).
     handles, labels = axes[0, 0].get_legend_handles_labels()

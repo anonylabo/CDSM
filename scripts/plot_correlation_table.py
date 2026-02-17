@@ -10,7 +10,9 @@ numbers underneath the heatmaps.
 from __future__ import annotations
 
 import argparse
+import math
 import re
+from decimal import Decimal, ROUND_HALF_UP
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
@@ -103,11 +105,17 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help="Apply augmented cov only if model run path contains any of these substrings (overrides global off).",
     )
+    parser.add_argument(
+        "--include-augmented-variants",
+        action="store_true",
+        help="If set, duplicate conditional runs as +CB variants (pred-only + context-blend rows).",
+    )
     parser.add_argument("--dpi", type=int, default=150)
     parser.add_argument("--table-fontsize", type=int, default=9)
     parser.add_argument("--out-csv", type=Path, help="Save the table as CSV.")
     parser.add_argument("--out-md", type=Path, help="Save the table as Markdown.")
     parser.add_argument("--out-png", type=Path, help="Render the table as a PNG (matplotlib table).")
+    parser.add_argument("--out-pdf", type=Path, help="Render the table as a PDF (matplotlib table).")
     parser.add_argument("--out-tex", type=Path, help="Save the table as LaTeX.")
     parser.add_argument(
         "--latex-style",
@@ -169,14 +177,51 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="If set, drop the Pred – Context columns and report only Pred – Truth metrics.",
     )
+    parser.add_argument(
+        "--sig-digits",
+        type=int,
+        default=None,
+        help="Format mean±std values with this many significant digits (overrides fixed .4f formatting).",
+    )
     return parser.parse_args()
 
 
-def _markdown_from_df(df: pd.DataFrame, float_fmt: str = ".4f", caption: str | None = None) -> str:
+def _format_sig(value: float, sig: int) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return "nan"
+    if value == 0:
+        return "0"
+    v = abs(float(value))
+    exp = math.floor(math.log10(v))
+    decimals = sig - 1 - exp
+    if decimals >= 0:
+        return f"{value:.{decimals}f}"
+    q = Decimal("1e{}".format(-decimals))
+    d = Decimal(str(value)).quantize(q, rounding=ROUND_HALF_UP)
+    return format(d, "f")
+
+
+def _format_sci(value: float, sig: int) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return "nan"
+    if value == 0:
+        return "0"
+    # sig significant digits in scientific notation
+    text = f"{value:.{sig - 1}e}"
+    # normalize exponent like e-01 -> e-1
+    text = text.replace("e-0", "e-").replace("e+0", "e+")
+    return text
+
+
+def _markdown_from_df(df: pd.DataFrame, float_fmt: str = ".4f", caption: str | None = None, sig_digits: int | None = None) -> str:
     def _fmt(value) -> str:
-        if isinstance(value, float):
-            return format(value, float_fmt)
-        return str(value)
+        if isinstance(value, str) and "±" in value:
+            return _format_pm_cell(value, float_fmt, sig_digits)
+        return _format_cell_text(value, float_fmt, sig_digits)
 
     headers = list(df.columns)
     lines = []
@@ -215,7 +260,32 @@ def _latex_format_cell(value, bold: bool, float_fmt: str) -> str:
     return r"\textbf{" + str(value) + "}" if bold else str(value)
 
 
-def _latex_blocks(blocks: list[tuple[str, pd.DataFrame, pd.DataFrame]], float_fmt: str = ".4f", caption: str | None = None) -> str:
+def _format_cell_text(value, float_fmt: str, sig_digits: int | None) -> str:
+    if isinstance(value, float):
+        if sig_digits is not None:
+            return _format_sig(value, sig_digits)
+        return format(value, float_fmt)
+    return str(value)
+
+
+def _format_pm_cell(value: str, float_fmt: str, sig_digits: int | None) -> str:
+    if sig_digits is None or "±" not in value:
+        return value
+    left, right = value.split("±", 1)
+    try:
+        left_f = float(left)
+        right_f = float(right)
+    except ValueError:
+        return value
+    return f"{_format_sig(left_f, sig_digits)}±{_format_sci(right_f, sig_digits)}"
+
+
+def _latex_blocks(
+    blocks: list[tuple[str, pd.DataFrame, pd.DataFrame]],
+    float_fmt: str = ".4f",
+    sig_digits: int | None = None,
+    caption: str | None = None,
+) -> str:
 
     if not blocks:
         return ""
@@ -242,7 +312,8 @@ def _latex_blocks(blocks: list[tuple[str, pd.DataFrame, pd.DataFrame]], float_fm
                     bold = bool(mv)
                 except Exception:
                     bold = False
-                cells.append(_latex_format_cell(val, bold, float_fmt))
+                text = _format_pm_cell(val, float_fmt, sig_digits) if isinstance(val, str) else _format_cell_text(val, float_fmt, sig_digits)
+                cells.append(_latex_format_cell(text, bold, float_fmt))
             lines.append(" & ".join(cells) + r" \\")
         if blk_idx != len(blocks) - 1:
             lines.append(r"\midrule")
@@ -285,13 +356,14 @@ def _latex_grouped_blocks(
     tabcolsep: float | None = None,
     arraystretch: float | None = None,
     resize_to: str | None = None,
+    sig_digits: int | None = None,
 ) -> str:
     if not blocks:
         return ""
     headers = list(blocks[0][1].columns)
     groups = _parse_grouped_headers(headers)
     if groups is None:
-        return _latex_blocks(blocks, float_fmt=float_fmt, caption=caption)
+        return _latex_blocks(blocks, float_fmt=float_fmt, caption=caption, sig_digits=sig_digits)
 
     col_spec = "l" + "c" * (len(headers) - 1)
     lines: List[str] = []
@@ -350,7 +422,8 @@ def _latex_grouped_blocks(
                     bold = bool(mv)
                 except Exception:
                     bold = False
-                cells.append(_latex_format_cell(val, bold, float_fmt))
+                text = _format_pm_cell(val, float_fmt, sig_digits) if isinstance(val, str) else _format_cell_text(val, float_fmt, sig_digits)
+                cells.append(_latex_format_cell(text, bold, float_fmt))
             lines.append(" & ".join(cells) + r" \\")
         if blk_idx != len(blocks) - 1:
             lines.append(r"\midrule")
@@ -387,6 +460,7 @@ def _process_block(
         regime_manifest = Path(regime_manifest).expanduser()
 
     runs = resolve_runs(outputs_root, runs_input)
+    run_dirs: Dict[Tuple, Path] = {k: v for k, v in runs.items() if v is not None}
     sample_tags = sample_tags_input or [None] * len(MODEL_ORDER)
     datasets: Dict[Tuple[str, str], List[Dict[str, object]]] = {}
     for idx, key in enumerate(MODEL_ORDER):
@@ -408,6 +482,20 @@ def _process_block(
             datasets[key] = payloads
         else:
             datasets[key] = [load_samples(run_dir, sample_tag=tag_clean)]
+
+    # Optionally duplicate conditional runs as +CB variants.
+    if args.include_augmented_variants:
+        for key in list(datasets.keys()):
+            if not (isinstance(key, tuple) and len(key) == 2 and key[1] == "conditional"):
+                continue
+            run_dir = run_dirs.get(key)
+            if args.augmented_run_substr:
+                if run_dir is None or not any(sub in str(run_dir) for sub in args.augmented_run_substr):
+                    continue
+            cb_key = (key[0], key[1], "cb")
+            datasets[cb_key] = datasets[key]
+            if run_dir is not None:
+                run_dirs[cb_key] = run_dir
 
     if not datasets:
         raise SystemExit("No model datasets loaded.")
@@ -465,12 +553,16 @@ def _process_block(
             vals_pred_truth: List[float] = []
             lens: List[int] = []
             for payload in payload_list:
-                run_dir = runs.get(key)
-                use_aug = args.use_augmented_cov or (
-                    args.augmented_run_substr
-                    and run_dir is not None
-                    and any(sub in str(run_dir) for sub in args.augmented_run_substr)
-                )
+                base_key = key[:2] if isinstance(key, tuple) and len(key) >= 2 else key
+                run_dir = run_dirs.get(key) or run_dirs.get(base_key)
+                if args.include_augmented_variants:
+                    use_aug = isinstance(key, tuple) and len(key) == 3 and key[2] == "cb"
+                else:
+                    use_aug = args.use_augmented_cov or (
+                        args.augmented_run_substr
+                        and run_dir is not None
+                        and any(sub in str(run_dir) for sub in args.augmented_run_substr)
+                    )
                 length, _mats, mets = aggregate_model(
                     key,
                     payload,
@@ -523,14 +615,16 @@ def _process_block(
     # Standardise legacy baseline names to paper terminology (and keep stable ordering).
     label_map = {
         "Train Uncond": "Sample Covariance",
-        "Train Unconditional": "Sample Covariance",
-        "Sample Covariance": "Sample Covariance",
-        "Window Uncond": "Sample Covariance",
-        "Window_uncond": "Sample Covariance",
-        "Local History": "Rolling Window",
-        "Local-History": "Rolling Window",
-        "Window Local": "Rolling Window",
-        "Window_local": "Rolling Window",
+        "Train Unconditional": "RW Predictor",
+        "Sample Covariance": "RW Predictor",
+        "Window Uncond": "RW Predictor",
+        "Window_uncond": "RW Predictor",
+        "Local History": "RW Predictor",
+        "Local-History": "RW Predictor",
+        "Window Local": "RW Predictor",
+        "Window_local": "RW Predictor",
+        "Global Static Empirical Covariance": "Static Predictor",
+        "Global Static": "Static Predictor",
         "Low-rank Factor": "Rolling Factor Model",
         "Window Factor": "Rolling Factor Model",
         "Window_factor": "Rolling Factor Model",
@@ -576,6 +670,13 @@ def _process_block(
                     if (run_dir / f"{candidate}_summary.json").exists():
                         eff_prefix = candidate
 
+                baseline_kind = kind or ("corr" if eff_prefix.endswith("_corr") else "cov")
+                use_baseline_cb = False
+                if label and "+CB" in label:
+                    use_baseline_cb = True
+                if eff_prefix.endswith("_cb") or prefix.endswith("_cb"):
+                    use_baseline_cb = True
+
                 # Align baseline window indices with the reference stage indices.
                 # Some baselines (e.g., window_baselines) may be run with include_val=false,
                 # which makes their test windows start at 0 while the reference model test
@@ -611,6 +712,8 @@ def _process_block(
                     stage,
                     use_correlation,
                     ref_indices=base_indices,
+                    use_augmented_cov=use_baseline_cb,
+                    baseline_kind=baseline_kind,
                 )
                 vals_pred_ctx.append(mets["pred_minus_context"])
                 vals_pred_truth.append(mets["pred_minus_truth"])
@@ -656,10 +759,12 @@ def _process_block(
     col_ctx = f"Pred \u2013 Context ({metric_label})"
     col_truth = f"Pred \u2013 Truth ({metric_label})"
     title_lookup = {
-        ("time", "conditional"): "Time (Conditional)",
-        ("time", "unconditional"): "Time (Unconditional)",
-        ("fourier", "conditional"): "Fourier (Conditional)",
-        ("fourier", "unconditional"): "Fourier (Unconditional)",
+        ("time", "conditional"): "CDSM-T",
+        ("time", "conditional", "cb"): "CDSM-T+CB",
+        ("time", "unconditional"): "CDSM-T WOC",
+        ("fourier", "conditional"): "CDSM-S",
+        ("fourier", "conditional", "cb"): "CDSM-S+CB",
+        ("fourier", "unconditional"): "CDSM-S WOC",
     }
     assets_repr = f"{asset_indices[0]}-{asset_indices[-1]}"
 
@@ -672,14 +777,42 @@ def _process_block(
 
     regime_order = {name: i for i, name in enumerate(regime_labels)}
     model_order = {k: i for i, k in enumerate(MODEL_ORDER)}
+    desired_row_order = [
+        "DeepVAR",
+        "DeepVAR+CB",
+        "CAB",
+        "DCC",
+        "DCC-GARCH",
+        "RW Predictor",
+        "Static Predictor",
+        "CDSM-S WOC",
+        "CDSM-T WOC",
+        "CDSM-S",
+        "CDSM-T",
+        "CDSM-S+CB",
+        "CDSM-T+CB",
+    ]
+    desired_order_map = {label: i for i, label in enumerate(desired_row_order)}
+
+    def _row_label(model_key):
+        if model_key in title_lookup:
+            return title_lookup[model_key]
+        if isinstance(model_key, tuple) and len(model_key) == 2 and model_key[0] == "baseline":
+            return model_key[1]
+        if isinstance(model_key, tuple):
+            return model_key[1]
+        return str(model_key)
 
     def _row_order(key_tuple) -> int:
         regime_label, model_key = key_tuple
         base = regime_order.get(regime_label, 0) * 1000
+        label = _row_label(model_key)
+        if label in desired_order_map:
+            return base + desired_order_map[label]
         if model_key in model_order:
-            return base + model_order[model_key]
+            return base + len(desired_order_map) + model_order[model_key]
         if isinstance(model_key, tuple) and len(model_key) == 2 and model_key[0] == "baseline":
-            return base + len(MODEL_ORDER) + baseline_order.get(model_key[1], 999)
+            return base + len(desired_order_map) + len(MODEL_ORDER) + baseline_order.get(model_key[1], 999)
         return base + 999
 
     rows = []
@@ -692,9 +825,21 @@ def _process_block(
         row["__order"] = _row_order(k)
         row_mean["__order"] = _row_order(k)
         if not args.only_pred_truth:
-            row[col_ctx] = f"{metrics_stats[k]['pred_minus_context'][0]:.4f}±{metrics_stats[k]['pred_minus_context'][1]:.4f}"
+            if args.sig_digits is not None:
+                row[col_ctx] = (
+                    f"{_format_sig(metrics_stats[k]['pred_minus_context'][0], args.sig_digits)}"
+                    f"±{_format_sig(metrics_stats[k]['pred_minus_context'][1], args.sig_digits)}"
+                )
+            else:
+                row[col_ctx] = f"{metrics_stats[k]['pred_minus_context'][0]:.4f}±{metrics_stats[k]['pred_minus_context'][1]:.4f}"
             row_mean[col_ctx] = metrics_stats[k]["pred_minus_context"][0]
-        row[col_truth] = f"{metrics_stats[k]['pred_minus_truth'][0]:.4f}±{metrics_stats[k]['pred_minus_truth'][1]:.4f}"
+        if args.sig_digits is not None:
+            row[col_truth] = (
+                f"{_format_sig(metrics_stats[k]['pred_minus_truth'][0], args.sig_digits)}"
+                f"±{_format_sig(metrics_stats[k]['pred_minus_truth'][1], args.sig_digits)}"
+            )
+        else:
+            row[col_truth] = f"{metrics_stats[k]['pred_minus_truth'][0]:.4f}±{metrics_stats[k]['pred_minus_truth'][1]:.4f}"
         row_mean[col_truth] = metrics_stats[k]["pred_minus_truth"][0]
         if block_label is not None:
             row["Block"] = block_label
@@ -928,7 +1073,13 @@ def main() -> None:
         for label, subdf in blocks_md:
             lines.append("| **" + label + "** | " + " | ".join([""] * (len(headers) - 1)) + " |")
             for _, row in subdf.iterrows():
-                lines.append("| " + " | ".join(str(v) for v in row.tolist()) + " |")
+                row_cells = []
+                for v in row.tolist():
+                    if isinstance(v, str) and "±" in v:
+                        row_cells.append(_format_pm_cell(v, ".4f", args.sig_digits))
+                    else:
+                        row_cells.append(_format_cell_text(v, ".4f", args.sig_digits))
+                lines.append("| " + " | ".join(row_cells) + " |")
         return "\n".join(lines)
 
     table_text = _markdown_blocks([(lbl, dfblk) for lbl, dfblk, _ in block_tables], caption=caption_text)
@@ -969,9 +1120,10 @@ def main() -> None:
                 tabcolsep=args.latex_tabcolsep,
                 arraystretch=args.latex_arraystretch,
                 resize_to=args.latex_resize,
+                sig_digits=args.sig_digits,
             )
         else:
-            latex_text = _latex_blocks(block_tables, float_fmt=".4f", caption=caption_text)
+            latex_text = _latex_blocks(block_tables, float_fmt=".4f", caption=caption_text, sig_digits=args.sig_digits)
         args.out_tex.parent.mkdir(parents=True, exist_ok=True)
         args.out_tex.write_text(latex_text)
         print(f"Saved LaTeX table to {args.out_tex}")
@@ -992,18 +1144,19 @@ def main() -> None:
                             tabcolsep=args.latex_tabcolsep,
                             arraystretch=args.latex_arraystretch,
                             resize_to=args.latex_resize,
+                            sig_digits=args.sig_digits,
                         )
                     )
                 else:
-                    blk_path.write_text(_latex_blocks([(label, subdf, submask)], float_fmt=".4f", caption=label))
+                    blk_path.write_text(_latex_blocks([(label, subdf, submask)], float_fmt=".4f", caption=label, sig_digits=args.sig_digits))
                 print(f"Saved per-block LaTeX to {blk_path}")
-    if args.out_png:
-        png_style = args.png_style
-        if png_style == "match":
-            png_style = args.latex_style
-        use_grouped_png = png_style == "grouped"
+    def _render_table_figure(out_path: Path, default_suffix: str) -> None:
+        fig_style = args.png_style
+        if fig_style == "match":
+            fig_style = args.latex_style
+        use_grouped_fig = fig_style == "grouped"
 
-        def _render_png(df_in: pd.DataFrame, mask_in: pd.DataFrame, caption: str | None, path: Path) -> None:
+        def _render_table(df_in: pd.DataFrame, mask_in: pd.DataFrame, caption: str | None, path: Path) -> None:
             def _format_col_label(label: str) -> str:
                 # Wrap long metric headers so they don't overlap in the PNG table.
                 # Examples:
@@ -1031,7 +1184,7 @@ def main() -> None:
             left_cols = [c for c in col_names if c in {"Block", "Model / Baseline"}]
             left_count = len(left_cols)
             grouped_headers = None
-            if use_grouped_png:
+            if use_grouped_fig:
                 metric_headers = col_names[left_count:]
                 grouped_headers = _parse_grouped_headers(["_"] + metric_headers)
                 if grouped_headers is not None:
@@ -1104,14 +1257,15 @@ def main() -> None:
             path.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(path, dpi=args.dpi, bbox_inches="tight")
             plt.close(fig)
-            print(f"Saved PNG table to {path}")
+            print(f"Saved table figure to {path}")
 
-        out_png = args.out_png
-        base = out_png
+        base = out_path
+        if base.suffix == "":
+            base = base.with_suffix(default_suffix)
         stem = base.stem
-        suffix = base.suffix or ".png"
+        suffix = base.suffix
 
-        # Combined PNG (all blocks stacked with a Block column)
+        # Combined figure (all blocks stacked with a Block column)
         if len(block_tables) > 1:
             combined_tables = []
             combined_masks = []
@@ -1124,14 +1278,19 @@ def main() -> None:
                 combined_masks.append(mask_with_block)
             df_combined = pd.concat(combined_tables, ignore_index=True)
             mask_combined = pd.concat(combined_masks, ignore_index=True)
-            _render_png(df_combined, mask_combined, caption_text, out_png)
+            _render_table(df_combined, mask_combined, caption_text, base)
 
             if args.per_block_outputs:
                 for label, subdf, submask in block_tables:
                     blk_path = base.with_name(f"{stem}_{label}{suffix}")
-                    _render_png(subdf, submask, label, blk_path)
+                    _render_table(subdf, submask, label, blk_path)
         else:
-            _render_png(block_tables[0][1], block_tables[0][2], caption_text, out_png)
+            _render_table(block_tables[0][1], block_tables[0][2], caption_text, base)
+
+    if args.out_png:
+        _render_table_figure(args.out_png, ".png")
+    if args.out_pdf:
+        _render_table_figure(args.out_pdf, ".pdf")
 
 
 if __name__ == "__main__":

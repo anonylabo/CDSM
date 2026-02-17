@@ -14,6 +14,7 @@ import argparse
 import gzip
 import json
 import os
+import math
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
@@ -299,9 +300,9 @@ def _plot_full_series_with_split(
             fontsize=9,
         )
     ax.set_title(title)
-    ax.set_xlabel("Time")
+    ax.set_xlabel("Time", labelpad=1)
     ax.set_ylabel(ylabel)
-    ax.tick_params(axis="x", rotation=30)
+    ax.tick_params(axis="x", rotation=30, pad=1)
     if show_legend:
         ax.legend(
             loc="upper left",
@@ -312,10 +313,10 @@ def _plot_full_series_with_split(
         )
 
 
-def plot_stylized_facts(
+def _plot_stylized_facts_axes(
+    axes: np.ndarray,
     df: pd.DataFrame,
     dataset_name: str,
-    out_path: str,
     acf_lags: int,
     rolling_window: int,
     full_df: pd.DataFrame | None = None,
@@ -326,8 +327,9 @@ def plot_stylized_facts(
     full_series_labels: str = "none",
     legend_cols: int = 3,
     legend_fontsize: int = 7,
-):
-    """Create and save the 4-panel stylized facts figure."""
+    panel_labels: List[str] | None = None,
+) -> None:
+    """Render the 4 stylized-facts panels onto provided axes (2x2)."""
     returns = df.values.T.astype(float)  # [A, T]
 
     # Drop near-constant assets (e.g. USD==1.0 after per-USD conversion).
@@ -344,16 +346,23 @@ def plot_stylized_facts(
     mu, sigma = np.mean(flattened), np.std(flattened)
     k = kurtosis(flattened, fisher=False, bias=False)
 
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle(f"Stylized Facts: {dataset_name}", fontsize=14)
+    axes = np.asarray(axes)
+    if axes.shape != (2, 2):
+        raise ValueError(f"Expected axes shape (2, 2), got {axes.shape}")
 
     # 1) Heavy tails
     ax = axes[0, 0]
-    ax.hist(flattened, bins=60, density=True, alpha=0.6, color="tab:blue", label="Returns")
+    ax.hist(flattened, bins=60, density=True, alpha=0.6, color="#1f77b4", label="Returns")
     xs = np.linspace(mu - 4 * sigma, mu + 4 * sigma, 300)
-    ax.plot(xs, norm.pdf(xs, mu, sigma), "k--", label=f"Normal ($\\mu$={mu:.4f}, $\\sigma$={sigma:.4f})")
-    ax.set_title(f"Heavy tails (kurtosis={k:.2f})")
-    ax.set_xlabel("Return")
+    ax.plot(
+        xs,
+        norm.pdf(xs, mu, sigma),
+        color="#2ca02c",
+        linestyle="--",
+        label=f"Normal ($\\mu$={mu:.4f}, $\\sigma$={sigma:.4f})",
+    )
+    ax.set_title(f"Heavy tails (kurtosis={k:.2f})", fontsize=11, pad=2)
+    ax.set_xlabel("Log Return", labelpad=1)
     ax.set_ylabel("Density")
     ax.legend()
 
@@ -362,8 +371,8 @@ def plot_stylized_facts(
     sample_idx = int(np.nanargmax(np.nanstd(returns, axis=1)))
     sample = np.abs(returns[sample_idx])
     ax.plot(df.index, sample, lw=0.8, color="tab:orange")
-    ax.set_title("|r_t| (volatility clustering)")
-    ax.set_xlabel("Time")
+    ax.set_title("|r_t| (volatility clustering)", fontsize=11, pad=2)
+    ax.set_xlabel("Time", labelpad=1)
     ax.set_ylabel("|Return|")
     ax.tick_params(axis="x", rotation=30)
 
@@ -375,8 +384,8 @@ def plot_stylized_facts(
     ax.stem(lags, acf_r, linefmt="tab:blue", markerfmt=" ", basefmt="k-", label="ACF(r)")
     ax.stem(lags + 0.1, acf_r2, linefmt="tab:red", markerfmt=" ", basefmt="k-", label="ACF(r$^2$)")
     ax.set_xlim(0, acf_lags)
-    ax.set_title("ACF of returns vs. squared returns")
-    ax.set_xlabel("Lag")
+    ax.set_title("ACF of returns vs. squared returns", fontsize=11, pad=2)
+    ax.set_xlabel("Lag", labelpad=1)
     ax.set_ylabel("Correlation")
     ax.legend()
 
@@ -407,12 +416,141 @@ def plot_stylized_facts(
             legend_cols=legend_cols,
             legend_fontsize=legend_fontsize,
         )
+        ax.set_title(title, fontsize=11, pad=2)
+        ax.set_ylabel(ylabel)
 
+    if panel_labels and len(panel_labels) == 4:
+        label_axes = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        for (r, c), label in zip(label_axes, panel_labels):
+            axes[r, c].text(
+                0.02,
+                0.98,
+                label,
+                transform=axes[r, c].transAxes,
+                ha="left",
+                va="top",
+                fontsize=11,
+                fontweight="bold",
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1.0),
+            )
+
+def plot_stylized_facts(
+    df: pd.DataFrame,
+    dataset_name: str,
+    out_path: str,
+    acf_lags: int,
+    rolling_window: int,
+    full_df: pd.DataFrame | None = None,
+    split_time: pd.Timestamp | None = None,
+    full_df_is_levels: bool = False,
+    full_series_mode: str = "levels",
+    full_series_returns_mode: str | None = None,
+    full_series_labels: str = "none",
+    legend_cols: int = 3,
+    legend_fontsize: int = 7,
+):
+    """Create and save the 4-panel stylized facts figure."""
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle(f"Stylized Facts: {dataset_name}", fontsize=14)
+    _plot_stylized_facts_axes(
+        axes,
+        df,
+        dataset_name=dataset_name,
+        acf_lags=acf_lags,
+        rolling_window=rolling_window,
+        full_df=full_df,
+        split_time=split_time,
+        full_df_is_levels=full_df_is_levels,
+        full_series_mode=full_series_mode,
+        full_series_returns_mode=full_series_returns_mode,
+        full_series_labels=full_series_labels,
+        legend_cols=legend_cols,
+        legend_fontsize=legend_fontsize,
+        panel_labels=None,
+    )
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     fig.savefig(out_path, dpi=200)
     plt.close(fig)
     print(f"Saved: {out_path}")
+
+
+def plot_stylized_facts_combined(
+    entries: List[dict],
+    out_path: str,
+    acf_lags: int,
+    rolling_window: int,
+    full_series_mode: str,
+    full_series_labels: str,
+    legend_cols: int,
+    legend_fontsize: int,
+    combined_cols: int = 2,
+) -> None:
+    """Create and save a combined multi-dataset stylized facts figure."""
+    if not entries:
+        return
+    cols = max(1, min(combined_cols, len(entries)))
+    rows = int(math.ceil(len(entries) / cols))
+    fig = plt.figure(figsize=(10.4 * cols, 7.2 * rows))
+    outer = fig.add_gridspec(rows, cols, wspace=0.16, hspace=0.24)
+    title_row_ratio = 0.05
+    label_idx = 0
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    for idx, entry in enumerate(entries):
+        r, c = divmod(idx, cols)
+        inner = outer[r, c].subgridspec(
+            3,
+            2,
+            height_ratios=[title_row_ratio, 1.0, 1.0],
+            hspace=0.45,
+            wspace=0.18,
+        )
+        ax_title = fig.add_subplot(inner[0, :])
+        ax_title.axis("off")
+        ax_title.text(
+            0.5,
+            0.5,
+            f"Stylized Facts: {entry['dataset_name']}",
+            ha="center",
+            va="center",
+            fontsize=12,
+        )
+        panel_labels = []
+        for _ in range(4):
+            label = f"({letters[label_idx]})" if label_idx < len(letters) else f"({label_idx + 1})"
+            panel_labels.append(label)
+            label_idx += 1
+        axes = np.array(
+            [
+                [fig.add_subplot(inner[1, 0]), fig.add_subplot(inner[1, 1])],
+                [fig.add_subplot(inner[2, 0]), fig.add_subplot(inner[2, 1])],
+            ]
+        )
+        _plot_stylized_facts_axes(
+            axes,
+            entry["df"],
+            dataset_name=entry["dataset_name"],
+            acf_lags=acf_lags,
+            rolling_window=rolling_window,
+            full_df=entry["full_df"],
+            split_time=entry["split_time"],
+            full_df_is_levels=entry["full_df_is_levels"],
+            full_series_mode=full_series_mode,
+            full_series_returns_mode=entry["returns_mode"],
+            full_series_labels=full_series_labels,
+            legend_cols=legend_cols,
+            legend_fontsize=legend_fontsize,
+            panel_labels=panel_labels,
+        )
+    for idx in range(len(entries), rows * cols):
+        r, c = divmod(idx, cols)
+        ax = fig.add_subplot(outer[r, c])
+        ax.axis("off")
+    fig.subplots_adjust(top=0.98, bottom=0.06, left=0.05, right=0.97)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved combined: {out_path}")
 
 
 def parse_args():
@@ -448,11 +586,30 @@ def parse_args():
     p.add_argument("--full-series-legend-cols", type=int, default=3, help="Legend columns for full series plot.")
     p.add_argument("--full-series-legend-fontsize", type=int, default=7, help="Legend font size.")
     p.add_argument("--output-dir", default="assets", help="Directory to save figures.")
+    p.add_argument(
+        "--combined-output",
+        default=None,
+        help="Optional path for a combined multi-dataset figure (default: <output-dir>/stylized_facts_<split>_combined.<format>).",
+    )
+    p.add_argument(
+        "--combined-cols",
+        type=int,
+        default=2,
+        help="Number of dataset columns in the combined figure (default: 2).",
+    )
+    p.add_argument(
+        "--output-format",
+        default="png",
+        choices=["png", "pdf", "svg"],
+        help="Figure format (default: png).",
+    )
     return p.parse_args()
 
 
 def main():
     args = parse_args()
+    fmt = args.output_format.lstrip(".").lower()
+    entries = []
     for data_dir in args.data_dirs:
         name = os.path.basename(os.path.abspath(data_dir))
         if args.split == "all":
@@ -466,7 +623,7 @@ def main():
         except FileNotFoundError:
             full_df, split_time, full_df_is_levels = df, None, False
         returns_mode = _infer_returns_mode(data_dir)
-        out_path = os.path.join(args.output_dir, f"stylized_facts_{name}_{args.split}.png")
+        out_path = os.path.join(args.output_dir, f"stylized_facts_{name}_{args.split}.{fmt}")
         plot_stylized_facts(
             df,
             dataset_name=name,
@@ -481,6 +638,35 @@ def main():
             full_series_labels=args.full_series_labels,
             legend_cols=args.full_series_legend_cols,
             legend_fontsize=args.full_series_legend_fontsize,
+        )
+        entries.append(
+            {
+                "df": df,
+                "dataset_name": name,
+                "full_df": full_df,
+                "split_time": split_time,
+                "full_df_is_levels": full_df_is_levels,
+                "returns_mode": returns_mode,
+            }
+        )
+
+    if args.combined_output or len(entries) > 1:
+        if args.combined_output:
+            combined_path = args.combined_output
+        else:
+            combined_path = os.path.join(
+                args.output_dir, f"stylized_facts_{args.split}_combined.{fmt}"
+            )
+        plot_stylized_facts_combined(
+            entries,
+            out_path=combined_path,
+            acf_lags=args.acf_lags,
+            rolling_window=args.rolling_window,
+            full_series_mode=args.full_series_mode,
+            full_series_labels=args.full_series_labels,
+            legend_cols=args.full_series_legend_cols,
+            legend_fontsize=args.full_series_legend_fontsize,
+            combined_cols=args.combined_cols,
         )
 
 

@@ -91,7 +91,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional JSON path to write noise-wall summary stats.",
     )
-    ap.add_argument("--output", type=Path, default=Path("assets/eigen_windows.png"), help="Output PNG path.")
+    ap.add_argument("--output", type=Path, default=Path("assets/eigen_windows.png"), help="Output path.")
+    ap.add_argument(
+        "--output-format",
+        default="png",
+        choices=["png", "pdf", "svg"],
+        help="Figure format (default: png).",
+    )
     ap.add_argument("--dpi", type=int, default=200, help="Figure DPI.")
     return ap.parse_args()
 
@@ -426,6 +432,8 @@ def _make_plots(
 
 def main() -> None:
     args = parse_args()
+    fmt = args.output_format.lstrip(".").lower()
+    out_path = args.output.expanduser().with_suffix(f".{fmt}")
     data_dir = _resolve_data_dir(args.dataset)
     dm = _build_datamodule(
         data_dir,
@@ -491,7 +499,7 @@ def main() -> None:
     want_noise_stats = bool(args.noise_wall_summary or args.noise_wall_out)
     noise_stats = _make_plots(
         windows,
-        args.output,
+        out_path,
         lam_min,
         lam_max,
         args.dpi,

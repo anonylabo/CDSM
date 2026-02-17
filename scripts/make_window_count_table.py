@@ -135,6 +135,18 @@ def parse_args() -> argparse.Namespace:
         help="LaTeX output path.",
     )
     ap.add_argument(
+        "--per-entry-markdown-dir",
+        type=Path,
+        default=None,
+        help="If set, also write one Markdown table per dataset into this directory.",
+    )
+    ap.add_argument(
+        "--per-entry-latex-dir",
+        type=Path,
+        default=None,
+        help="If set, also write one LaTeX table per dataset into this directory.",
+    )
+    ap.add_argument(
         "--omit-stride",
         dest="include_stride",
         action="store_false",
@@ -430,6 +442,31 @@ def main() -> None:
         tight=args.latex_tight,
         short_headers=args.short_headers,
     )
+    if args.per_entry_markdown_dir is not None:
+        md_dir = args.per_entry_markdown_dir.expanduser().resolve()
+        md_dir.mkdir(parents=True, exist_ok=True)
+        for label, wc, cfg in rows:
+            fname = f"window_counts_{label.replace('/', '_')}_C{cfg.context_len}_P{cfg.pred_len}_S{cfg.stride}.md"
+            _write_markdown(
+                md_dir / fname,
+                [(label, wc, cfg)],
+                include_stride=args.include_stride,
+                include_ratios=args.include_ratios,
+                short_headers=args.short_headers,
+            )
+    if args.per_entry_latex_dir is not None:
+        tex_dir = args.per_entry_latex_dir.expanduser().resolve()
+        tex_dir.mkdir(parents=True, exist_ok=True)
+        for label, wc, cfg in rows:
+            fname = f"window_counts_{label.replace('/', '_')}_C{cfg.context_len}_P{cfg.pred_len}_S{cfg.stride}.tex"
+            _write_latex(
+                tex_dir / fname,
+                [(label, wc, cfg)],
+                include_stride=args.include_stride,
+                include_ratios=args.include_ratios,
+                tight=args.latex_tight,
+                short_headers=args.short_headers,
+            )
     print(f"[DONE] Wrote {args.output_markdown} and {args.output_latex}")
 
 

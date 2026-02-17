@@ -233,6 +233,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional label text to annotate the train/test boundary (only with --split all).",
     )
     p.add_argument("--output-dir", default="assets", help="Directory to save figures.")
+    p.add_argument(
+        "--output-format",
+        default="png",
+        choices=["png", "pdf", "svg"],
+        help="Figure format (default: png).",
+    )
     return p.parse_args()
 
 
@@ -260,7 +266,8 @@ def main() -> None:
                 warm_df = load_panel(data_dir, "train", args.max_assets)
             except Exception:
                 warm_df = None
-        out_path = os.path.join(args.output_dir, f"bull_bear_{name}_{args.split}.png")
+        fmt = args.output_format.lstrip(".").lower()
+        out_path = os.path.join(args.output_dir, f"bull_bear_{name}_{args.split}.{fmt}")
         plot_regimes(
             df,
             dataset=name,

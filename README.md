@@ -1,6 +1,6 @@
 # Conditional Fourier Diffusion
 
-This repository contains the experiments used in our paper on sliding-window covariance estimation. This is a minimal public subset centered on `notebooks/paper.ipynb`; datasets and generated assets are not included.
+This repository contains the experiments used in our paper on sliding-window covariance estimation. This is a minimal public subset; datasets and generated assets are not included. For step-by-step reproduction, start with `notebooks/reproduce_thesis.ipynb` and use `notebooks/paper.ipynb` as the full command log.
 
 ## 1. Environment Setup
 
@@ -10,14 +10,14 @@ conda create -n cfdiff python=3.10 -y
 conda activate cfdiff
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 pip install -e .
-pip install pot ipywidgets lightning[extra]
+pip install pot ipywidgets lightning[extra] gluonts pandas matplotlib seaborn requests PyYAML tqdm pillow
 ```
 
 ### 1.2 Baselines (PyPortfolioOpt + ARCH)
 ```bash
 conda create -n baselines python=3.10 -y
 conda activate baselines
-pip install arch PyPortfolioOpt statsmodels
+pip install arch PyPortfolioOpt statsmodels gluonts pandas matplotlib seaborn
 ```
 Use `conda run -n baselines ...` to execute baseline commands so the main environment is untouched.
 
@@ -28,10 +28,15 @@ Default data set is `exchange_rate_clean`. Set the data path before running expe
 ```bash
 export CFDIFF_DATA_DIR=$HOME/.gluonts/datasets/exchange_rate_clean
 ```
-Use `scripts/prepare_*_dataset.py` to build datasets. The iShares CSV inputs are not included; place them under `ishares/` before running `scripts/prepare_ishares_dataset.py`.
+Use the dataset preparation scripts to rebuild the public datasets:
+
+- `scripts/prepare_exchange_rate_dataset.py` (Exchange, GluonTS)
+- `scripts/prepare_fx30_ecb_dataset.py` (FX29, ECB API, use `--exclude-usd`)
+- `scripts/prepare_industry49_dataset.py` (Ken French 49 Industry)
+- `scripts/prepare_ishares_dataset.py` (iShares ETFs; place CSVs under `ishares/`)
 
 ## 3. Training and Sampling
-The notebook `notebooks/paper.ipynb` lists the commands used for the paper. Key examples:
+The notebook `notebooks/reproduce_thesis.ipynb` lists the commands used for the thesis experiments. Key examples:
 
 **Conditional · time domain (train + sample)**
 ```bash
@@ -50,7 +55,7 @@ python -m cfdiff.cmd.sample experiment=fourier ...
 python -m fdiff.cmd.train experiment=unconditional ...
 python -m fdiff.cmd.sample experiment=unconditional ...
 ```
-Use the overrides listed in `paper.ipynb` to match the paper (context_len=60, pred_len=30, Beta t-sampling, etc.).
+Use the overrides listed in `reproduce_thesis.ipynb` to match the thesis (context/pred lengths, Beta t-sampling, 1000 EM steps, etc.).
 
 ## 4. Baselines
 To run the classical estimators (sample covariance, Ledoit–Wolf, RiskMetrics) across validation+test windows:
@@ -68,7 +73,7 @@ conda run -n baselines python src/baselines/cmd/run.py \
 ```
 
 ## 5. Plotting / Metrics
-See `notebooks/paper.ipynb` for the exact commands. Common scripts include:
+See `notebooks/reproduce_thesis.ipynb` or `notebooks/paper.ipynb` for the exact commands. Common scripts include:
 
 - `scripts/plot_stylized_facts.py`
 - `scripts/plot_bull_bear_regimes.py`
@@ -78,8 +83,8 @@ See `notebooks/paper.ipynb` for the exact commands. Common scripts include:
 - `scripts/plot_pair_window_metric.py`
 - `scripts/plot_correlation_table.py`
 - `scripts/make_dataset_summary.py`, `scripts/make_window_count_table.py`
-- `scripts/make_paper_metric_tables.py`, `scripts/compute_loglik_regret.py`
-- `scripts/compute_cross_signal_energy.py`
+- `scripts/make_paper_metric_tables.py`, `scripts/compute_loglik_regret.py`, `scripts/make_ablation_context_table.py`
+- `scripts/compute_cross_signal_energy.py`, `scripts/plot_paper_figures.sh`
 
 Each script has CLI help (`-h`).
 

@@ -84,6 +84,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use @{\\,} column padding in LaTeX for a more compact table.",
     )
+    ap.add_argument(
+        "--per-entry-markdown-dir",
+        type=Path,
+        default=None,
+        help="If set, also write one Markdown table per entry into this directory.",
+    )
+    ap.add_argument(
+        "--per-entry-latex-dir",
+        type=Path,
+        default=None,
+        help="If set, also write one LaTeX table per entry into this directory.",
+    )
     ap.set_defaults(include_total=True)
     return ap.parse_args()
 
@@ -414,6 +426,18 @@ def main() -> None:
     ]
     _write_markdown(specs, args.output_markdown, include_total=args.include_total)
     _write_latex(specs, args.output_latex, include_total=args.include_total, tight=args.latex_tight)
+    if args.per_entry_markdown_dir is not None:
+        md_dir = args.per_entry_markdown_dir.expanduser().resolve()
+        md_dir.mkdir(parents=True, exist_ok=True)
+        for spec in specs:
+            fname = f"dataset_summary_{spec.label.replace('/', '_')}_C{spec.context_len}_P{spec.pred_len}.md"
+            _write_markdown([spec], md_dir / fname, include_total=args.include_total)
+    if args.per_entry_latex_dir is not None:
+        tex_dir = args.per_entry_latex_dir.expanduser().resolve()
+        tex_dir.mkdir(parents=True, exist_ok=True)
+        for spec in specs:
+            fname = f"dataset_summary_{spec.label.replace('/', '_')}_C{spec.context_len}_P{spec.pred_len}.tex"
+            _write_latex([spec], tex_dir / fname, include_total=args.include_total, tight=args.latex_tight)
     print(f"[DONE] Wrote {args.output_markdown} and {args.output_latex}")
 
 

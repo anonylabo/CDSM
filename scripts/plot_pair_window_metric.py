@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import math
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -44,6 +45,31 @@ def parse_args() -> argparse.Namespace:
         nargs="+",
         default=None,
         help="Optional labels for pred-runs (same order). Used when plotting separate model lines.",
+    )
+    p.add_argument(
+        "--batch-aggregate",
+        action="store_true",
+        help=(
+            "If set, aggregate multiple samples.pt under samples_history by mean/std and "
+            "plot the mean with a shaded band."
+        ),
+    )
+    p.add_argument(
+        "--single-repeat",
+        action="store_true",
+        help="If set with --batch-aggregate, select a single repeat instead of averaging.",
+    )
+    p.add_argument(
+        "--repeat-index",
+        type=int,
+        default=0,
+        help="Repeat index to select when --single-repeat is set (default: 0).",
+    )
+    p.add_argument(
+        "--trajectory-index",
+        type=int,
+        default=0,
+        help="Trajectory index to select if samples contain multiple trajectories (default: 0).",
     )
     p.add_argument(
         "--metric-kind",
@@ -185,7 +211,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--combined-legend",
-        choices=["first", "outside", "none"],
+        choices=["first", "outside", "top", "none"],
         default="first",
         help="Where to show the legend in the combined grid.",
     )
@@ -245,17 +271,82 @@ def resolve_artifact_path(run_dir: Path, filename: str, sample_tag: Optional[str
     raise FileNotFoundError(f"Unable to locate {filename} in {run_dir}.")
 
 
-def load_samples(run_dir: Path, sample_tag: Optional[str]) -> Dict[str, np.ndarray]:
-    path = resolve_artifact_path(run_dir, "samples.pt", sample_tag)
+def load_samples_from_path(path: Path) -> Dict[str, np.ndarray]:
     data = torch.load(path, map_location="cpu", weights_only=False)
+
+    def _to_np(x):
+        if isinstance(x, torch.Tensor):
+            return x.cpu().numpy()
+        return np.asarray(x)
+
     payload: Dict[str, np.ndarray] = {
-        "pred": data["samples"].cpu().numpy(),
-        "truth": data["truth"].cpu().numpy(),
-        "context": data.get("context").cpu().numpy() if data.get("context") is not None else None,
+        "pred": _to_np(data["samples"]),
+        "truth": _to_np(data["truth"]),
+        "context": _to_np(data.get("context")) if data.get("context") is not None else None,
     }
     if data.get("window_stage_counts") is not None:
         payload["stage_counts"] = {k: int(v) for k, v in data["window_stage_counts"].items()}
     return payload
+
+
+def load_samples(run_dir: Path, sample_tag: Optional[str]) -> Dict[str, np.ndarray]:
+    path = resolve_artifact_path(run_dir, "samples.pt", sample_tag)
+    return load_samples_from_path(path)
+
+
+def resolve_sample_paths(run_dir: Path, sample_tag: Optional[str], batch_aggregate: bool) -> List[Path]:
+    if not batch_aggregate:
+        return [resolve_artifact_path(run_dir, "samples.pt", sample_tag)]
+
+    candidates: List[Path] = []
+    history_root = run_dir / "samples_history"
+    if history_root.is_dir():
+        for sub in sorted(history_root.iterdir()):
+            if not sub.is_dir():
+                continue
+            if sample_tag and sample_tag not in sub.name:
+                continue
+            direct = sub / "samples.pt"
+            if direct.exists():
+                candidates.append(direct)
+                continue
+            for child in sorted(sub.iterdir()):
+                if not child.is_dir():
+                    continue
+                nested = child / "samples.pt"
+                if nested.exists():
+                    candidates.append(nested)
+
+    if not candidates and history_root.is_dir():
+        for p in sorted(history_root.rglob("samples.pt")):
+            if sample_tag and sample_tag not in str(p.parent):
+                continue
+            candidates.append(p)
+
+    if not candidates:
+        fallback = run_dir / "samples.pt"
+        if fallback.exists():
+            candidates.append(fallback)
+
+    if not candidates and run_dir.is_dir():
+        subruns = [p for p in sorted(run_dir.iterdir()) if p.is_dir()]
+        for sub in subruns:
+            if sample_tag and sample_tag not in sub.name:
+                continue
+            nested = sub / "samples.pt"
+            if nested.exists():
+                candidates.append(nested)
+
+    if not candidates:
+        raise FileNotFoundError(f"Unable to locate samples.pt in {run_dir} (sample_tag={sample_tag}).")
+    return candidates
+
+
+def load_model_payloads(
+    run_dir: Path, sample_tag: Optional[str], batch_aggregate: bool
+) -> List[Dict[str, np.ndarray]]:
+    paths = resolve_sample_paths(run_dir, sample_tag, batch_aggregate)
+    return [load_samples_from_path(p) for p in paths]
 
 
 def stage_indices(stage_counts: Dict[str, int], stage: str, total: int) -> List[int]:
@@ -545,6 +636,7 @@ def main() -> None:
     if args.pred_labels and len(args.pred_labels) != len(run_dirs):
         raise SystemExit("--pred-labels must match the number of --pred-runs.")
     sample_tags = args.pred_sample_tags or [None] * len(run_dirs)
+    sample_tags = [None if tag in {None, "-"} else tag for tag in sample_tags]
     sample_tags = [None if tag in {None, "-", ""} else tag for tag in sample_tags]
     run_labels = args.pred_labels or [p.name for p in run_dirs]
 
@@ -582,18 +674,44 @@ def main() -> None:
 
     if len(asset_indices) < 2:
         raise SystemExit("Provide at least two assets for pairwise plotting.")
-    pred_payloads = [load_samples(run_dir, tag) for run_dir, tag in zip(run_dirs, sample_tags)]
+    pred_payloads = [
+        load_model_payloads(run_dir, tag, args.batch_aggregate) for run_dir, tag in zip(run_dirs, sample_tags)
+    ]
+    if args.single_repeat and args.batch_aggregate:
+        trimmed = []
+        for payloads in pred_payloads:
+            if not payloads:
+                raise SystemExit("No repeat payloads found for --single-repeat.")
+            idx = args.repeat_index % len(payloads)
+            trimmed.append([payloads[idx]])
+        pred_payloads = trimmed
+
+    if args.trajectory_index is not None:
+        def _select_trajectory(payload):
+            pred = payload.get("pred")
+            if isinstance(pred, np.ndarray) and pred.ndim == 4:
+                # assume (W, S, P, A); pick trajectory index along S
+                traj = args.trajectory_index % pred.shape[1]
+                payload = dict(payload)
+                payload["pred"] = pred[:, traj, :, :]
+            return payload
+        pred_payloads = [[_select_trajectory(p) for p in payloads] for payloads in pred_payloads]
 
     # Use first run as reference for truth/context and stage counts.
-    ref = pred_payloads[0]
-    stage_counts = ref.get("stage_counts", {})
+    ref = pred_payloads[0][0]
+    stage_counts = {}
+    for payload in pred_payloads[0]:
+        if payload.get("stage_counts") is not None:
+            stage_counts = payload["stage_counts"]
+            break
     total_windows = ref["pred"].shape[0]
     indices = stage_indices(stage_counts, args.stage, total_windows)
     val_n = int(stage_counts.get("val", 0))
 
     run_aug_flags = []
-    for run_dir in run_dirs:
-        run_aug = args.use_augmented_cov or (
+    for run_dir, run_label in zip(run_dirs, run_labels):
+        label_aug = bool(run_label) and any(tag in run_label for tag in ("+CB", "+CA", "+AC"))
+        run_aug = args.use_augmented_cov or label_aug or (
             args.augmented_run_substr
             and any(sub in str(run_dir) for sub in args.augmented_run_substr)
         )
@@ -636,26 +754,35 @@ def main() -> None:
         x_vals = []
         truth_series = [] if not use_metric_name else None
         pred_series_list = [[] for _ in pred_payloads]
+        pred_std_list = [[] for _ in pred_payloads]
         baseline_series_list = [[] for _ in baseline_entries]
         for local_i, idx in enumerate(indices):
             if idx >= total_windows:
                 break
             x_vals.append(local_i if args.x_axis == "stage" else idx)
-            ctx_seq = ref["context"][idx] if ref.get("context") is not None else None
             fallback_idx = local_i if args.stage != "all" else idx
             if use_metric_name:
                 truth_seq = ref["truth"][idx][:, [idx_a, idx_b]]
                 truth_mat = compute_window_matrices(truth_seq, use_correlation)
-                for run_idx, (payload, run_aug) in enumerate(zip(pred_payloads, run_aug_flags)):
-                    pred_seq = payload["pred"][idx]
-                    pred_flat = flatten_pred(pred_seq)
-                    if run_aug:
-                        if ctx_seq is None:
-                            raise RuntimeError("No context available for augmented cov.")
-                        pred_flat = np.concatenate([ctx_seq, pred_flat], axis=0)
-                    pred_flat = pred_flat[:, [idx_a, idx_b]]
-                    pred_mat = compute_window_matrices(pred_flat, use_correlation)
-                    pred_series_list[run_idx].append(compute_metric(args.metric_name, pred_mat, truth_mat))
+                for run_idx, (payloads, run_aug) in enumerate(zip(pred_payloads, run_aug_flags)):
+                    values = []
+                    for payload in payloads:
+                        pred_seq = payload["pred"][idx]
+                        pred_flat = flatten_pred(pred_seq)
+                        if run_aug:
+                            ctx_seq = payload["context"][idx] if payload.get("context") is not None else None
+                            if ctx_seq is None:
+                                raise RuntimeError("No context available for augmented cov.")
+                            pred_flat = np.concatenate([ctx_seq, pred_flat], axis=0)
+                        pred_flat = pred_flat[:, [idx_a, idx_b]]
+                        pred_mat = compute_window_matrices(pred_flat, use_correlation)
+                        values.append(compute_metric(args.metric_name, pred_mat, truth_mat))
+                    mean_val = float(np.mean(values)) if values else np.nan
+                    pred_series_list[run_idx].append(mean_val)
+                    if len(values) > 1:
+                        pred_std_list[run_idx].append(float(np.std(values)))
+                    else:
+                        pred_std_list[run_idx].append(None)
                 for b_idx, baseline in enumerate(baseline_entries):
                     raw = _baseline_matrix_for_window(baseline["run_paths"], baseline["prefix"], idx)
                     if raw is None and fallback_idx != idx:
@@ -677,14 +804,23 @@ def main() -> None:
             else:
                 truth_seq = ref["truth"][idx]
                 truth_series.append(pair_metric(truth_seq, idx_a, idx_b, args.metric_kind))
-                for run_idx, (payload, run_aug) in enumerate(zip(pred_payloads, run_aug_flags)):
-                    pred_seq = payload["pred"][idx]
-                    pred_flat = flatten_pred(pred_seq)
-                    if run_aug:
-                        if ctx_seq is None:
-                            raise RuntimeError("No context available for augmented cov.")
-                        pred_flat = np.concatenate([ctx_seq, pred_flat], axis=0)
-                    pred_series_list[run_idx].append(pair_metric(pred_flat, idx_a, idx_b, args.metric_kind))
+                for run_idx, (payloads, run_aug) in enumerate(zip(pred_payloads, run_aug_flags)):
+                    values = []
+                    for payload in payloads:
+                        pred_seq = payload["pred"][idx]
+                        pred_flat = flatten_pred(pred_seq)
+                        if run_aug:
+                            ctx_seq = payload["context"][idx] if payload.get("context") is not None else None
+                            if ctx_seq is None:
+                                raise RuntimeError("No context available for augmented cov.")
+                            pred_flat = np.concatenate([ctx_seq, pred_flat], axis=0)
+                        values.append(pair_metric(pred_flat, idx_a, idx_b, args.metric_kind))
+                    mean_val = float(np.mean(values)) if values else np.nan
+                    pred_series_list[run_idx].append(mean_val)
+                    if len(values) > 1:
+                        pred_std_list[run_idx].append(float(np.std(values)))
+                    else:
+                        pred_std_list[run_idx].append(None)
                 for b_idx, baseline in enumerate(baseline_entries):
                     raw = _baseline_matrix_for_window(baseline["run_paths"], baseline["prefix"], idx)
                     if raw is None and fallback_idx != idx:
@@ -712,6 +848,7 @@ def main() -> None:
                 "x": x_vals,
                 "truth": truth_series,
                 "preds": list(zip(run_labels, pred_series_list)),
+                "pred_std": pred_std_list,
                 "baselines": list(zip([b["label"] for b in baseline_entries], baseline_series_list)),
             }
         )
@@ -723,10 +860,22 @@ def main() -> None:
                 truth_series,
                 color="black",
                 linewidth=1.6,
-                label=f"Truth {metric_label}({label_a},{label_b})",
+                label=f"Ground truth {metric_label}({label_a},{label_b})",
             )
-        for run_label, series in zip(run_labels, pred_series_list):
-            ax.plot(x_vals, series, linewidth=1.2, alpha=0.85, label=run_label)
+        for idx_run, (run_label, series) in enumerate(zip(run_labels, pred_series_list)):
+            line = ax.plot(x_vals, series, linewidth=1.2, alpha=0.85, label=run_label)[0]
+            std_series = pred_std_list[idx_run] if idx_run < len(pred_std_list) else None
+            if std_series and any(s is not None for s in std_series):
+                std = np.array([s if s is not None else np.nan for s in std_series], dtype=float)
+                series_arr = np.array(series, dtype=float)
+                ax.fill_between(
+                    x_vals,
+                    series_arr - std,
+                    series_arr + std,
+                    color=line.get_color(),
+                    alpha=0.18,
+                    linewidth=0,
+                )
         for baseline_label, series in zip([b["label"] for b in baseline_entries], baseline_series_list):
             ax.plot(x_vals, series, linewidth=1.2, alpha=0.85, label=baseline_label)
 
@@ -753,7 +902,8 @@ def main() -> None:
             )
             _apply_legend_alpha(leg, args.legend_alpha)
         if args.title:
-            ax.set_title(args.title)
+            ax.set_title(args.title, pad=12, y=1.08)
+            ax.title.set_clip_on(False)
 
         out_path = _pair_output_path(args.output, pair_label)
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -777,12 +927,27 @@ def main() -> None:
             c = idx % cols
             ax = axes[r][c]
             if result["truth"] is not None:
-                ax.plot(result["x"], result["truth"], color="black", linewidth=1.4, label="Truth")
-            for run_label, series in result["preds"]:
-                ax.plot(result["x"], series, linewidth=1.1, alpha=0.85, label=run_label)
+                ax.plot(result["x"], result["truth"], color="black", linewidth=1.4, label="Ground truth")
+            for idx_run, (run_label, series) in enumerate(result["preds"]):
+                line = ax.plot(result["x"], series, linewidth=1.1, alpha=0.85, label=run_label)[0]
+                std_series = None
+                if "pred_std" in result and idx_run < len(result["pred_std"]):
+                    std_series = result["pred_std"][idx_run]
+                if std_series and any(s is not None for s in std_series):
+                    std = np.array([s if s is not None else np.nan for s in std_series], dtype=float)
+                    series_arr = np.array(series, dtype=float)
+                    ax.fill_between(
+                        result["x"],
+                        series_arr - std,
+                        series_arr + std,
+                        color=line.get_color(),
+                        alpha=0.18,
+                        linewidth=0,
+                    )
             for baseline_label, series in result["baselines"]:
                 ax.plot(result["x"], series, linewidth=1.1, alpha=0.85, label=baseline_label)
-            ax.set_title(result["pair"])
+            ax.set_title(result["pair"], pad=12, y=1.08)
+            ax.title.set_clip_on(False)
             if r == rows - 1:
                 ax.set_xlabel(x_label)
             if c == 0:
@@ -813,6 +978,22 @@ def main() -> None:
                 )
                 _apply_legend_alpha(leg, args.legend_alpha)
                 fig.tight_layout(rect=[0, 0, 0.85, 1])
+        elif args.combined_legend == "top":
+            handles, labels = axes[0][0].get_legend_handles_labels()
+            if handles:
+                leg = fig.legend(
+                    handles,
+                    labels,
+                    loc="upper center",
+                    bbox_to_anchor=(0.5, 0.98),
+                    frameon=False,
+                    ncol=args.legend_columns,
+                    fontsize=args.legend_fontsize,
+                )
+                _apply_legend_alpha(leg, args.legend_alpha)
+                legend_rows = max(1, math.ceil(len(labels) / max(1, args.legend_columns)))
+                reserved = min(0.16, 0.035 * legend_rows + 0.03)
+                fig.tight_layout(rect=[0, 0, 1, 1 - reserved])
         else:
             fig.tight_layout()
         fig.savefig(

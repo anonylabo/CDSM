@@ -8,7 +8,7 @@ This reproduces the style of FourierDiffusion's spectral interpretation plots:
 
 The script operates directly on the cleaned GluonTS dataset (e.g. exchange_rate_clean),
 using the same standardisation as the ConditionalGluonTSJsonDatamodule, and saves
-two PNG figures under ./assets by default.
+figures under ./assets by default.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import string
 from typing import List, Tuple
 
 import matplotlib.pyplot as plt
@@ -27,6 +28,17 @@ from cfdiff.eval.fourier_metrics import _spectral_density
 
 
 EPS = 1e-15
+DISPLAY_LABELS = {
+    "exchange_rate_clean": "Exchange",
+    "fx30_ecb": "FX29",
+    "industry49_clean": "Industry49",
+    "industry49_clean_0.85": "Industry49",
+    "ishares14_clean": "iShares14",
+}
+
+
+def _display_label(label: str) -> str:
+    return DISPLAY_LABELS.get(label, label)
 
 
 def _default_data_dir() -> Path:
@@ -57,19 +69,19 @@ def parse_args() -> argparse.Namespace:
         "--output-spectral",
         type=Path,
         default=None,
-        help="Output path for the spectral-density plot (default: assets/dataset_spectral_density.png).",
+        help="Output path for the spectral-density plot (default: assets/dataset_spectral_density.<output-format>).",
     )
     ap.add_argument(
         "--output-energy",
         type=Path,
         default=None,
-        help="Output path for the time-domain energy plot (default: assets/dataset_energy_density.png).",
+        help="Output path for the time-domain energy plot (default: assets/dataset_energy_density.<output-format>).",
     )
     ap.add_argument(
         "--combined-output",
         type=Path,
         default=None,
-        help="Optional single figure with spectral (left) and energy (right) subplots (default: assets/dataset_spectrum_energy.png).",
+        help="Optional single figure with spectral (left) and energy (right) subplots (default: assets/dataset_spectrum_energy.<output-format>).",
     )
     ap.add_argument(
         "--combined-layout",
@@ -82,6 +94,18 @@ def parse_args() -> argparse.Namespace:
         "--combined-stack-datasets",
         action="store_true",
         help="Stack datasets vertically in the combined figure (each row is one dataset; spectral left, energy right).",
+    )
+    ap.add_argument(
+        "--per-dataset-dir",
+        type=Path,
+        default=None,
+        help="If set, saves a separate two-panel (spectral + energy) figure for each dataset into this directory.",
+    )
+    ap.add_argument(
+        "--output-format",
+        default="png",
+        choices=["png", "pdf", "svg"],
+        help="Figure format (default: png).",
     )
     return ap.parse_args()
 
@@ -119,6 +143,7 @@ def _compute_density(data_dir: Path, split: str) -> Tuple[np.ndarray, np.ndarray
 
 def main() -> None:
     args = parse_args()
+    fmt = args.output_format.lstrip(".").lower()
 
     if args.data_dirs is None:
         data_dirs = [_default_data_dir()]
@@ -134,23 +159,29 @@ def main() -> None:
         out_spec = assets_dir / "dataset_spectral_density.png"
     else:
         out_spec = args.output_spectral
-        out_spec.parent.mkdir(parents=True, exist_ok=True)
+    out_spec = out_spec.with_suffix(f".{fmt}")
+    out_spec.parent.mkdir(parents=True, exist_ok=True)
     if args.output_energy is None:
         out_energy = assets_dir / "dataset_energy_density.png"
     else:
         out_energy = args.output_energy
-        out_energy.parent.mkdir(parents=True, exist_ok=True)
+    out_energy = out_energy.with_suffix(f".{fmt}")
+    out_energy.parent.mkdir(parents=True, exist_ok=True)
     if args.combined_output is None:
         out_combined = assets_dir / "dataset_spectrum_energy.png"
     else:
         out_combined = args.combined_output
-        out_combined.parent.mkdir(parents=True, exist_ok=True)
+    out_combined = out_combined.with_suffix(f".{fmt}")
+    out_combined.parent.mkdir(parents=True, exist_ok=True)
+
+    results = [
+        _compute_density(d, args.split) for d in data_dirs
+    ]  # list of (freq_norm, spec_mean, time_norm, energy_mean, label)
 
     # Plot spectral density
     plt.figure(figsize=(4.0, 3.0))
-    for d in data_dirs:
-        freq_norm, spec_mean, _, _, label = _compute_density(d, args.split)
-        plt.plot(freq_norm[1:], spec_mean[1:], label=label)
+    for freq_norm, spec_mean, _, _, label in results:
+        plt.plot(freq_norm[1:], spec_mean[1:], label=_display_label(label))
     plt.yscale("log")
     plt.xlabel("Normalized Frequency")
     plt.ylabel("Spectral Density (normalised)")
@@ -166,9 +197,8 @@ def main() -> None:
 
     # Plot time-domain energy density
     plt.figure(figsize=(4.0, 3.0))
-    for d in data_dirs:
-        _, _, time_norm, energy_mean, label = _compute_density(d, args.split)
-        plt.plot(time_norm, energy_mean, label=label)
+    for _, _, time_norm, energy_mean, label in results:
+        plt.plot(time_norm, energy_mean, label=_display_label(label))
     plt.yscale("log")
     plt.xlabel("Normalized Time")
     plt.ylabel("Energy Density (normalised)")
@@ -186,47 +216,64 @@ def main() -> None:
     if args.combined_stack_datasets:
         nrows = len(data_dirs)
         ncols = 2
-        figsize = (8.0, max(2.6, 2.6 * nrows))
-        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize, squeeze=False)
-        for idx, d in enumerate(data_dirs):
-            freq_norm, spec_mean, time_norm, energy_mean, label = _compute_density(d, args.split)
-            ax_spec = axes[idx, 0]
-            ax_energy = axes[idx, 1]
+        data_height = 2.6
+        label_height = 0.35
+        figsize = (8.0, max(2.6, (data_height + label_height) * nrows))
+        fig = plt.figure(figsize=figsize)
+        height_ratios = [1.0, 0.18] * nrows
+        grid = fig.add_gridspec(nrows=nrows * 2, ncols=ncols, height_ratios=height_ratios, hspace=0.28, wspace=0.3)
+
+        letters = string.ascii_lowercase
+        total_panels = nrows * ncols
+        labels = [f"({letters[i]})" if i < len(letters) else f"({i + 1})" for i in range(total_panels)]
+
+        for idx, (freq_norm, spec_mean, time_norm, energy_mean, label) in enumerate(results):
+            label_display = _display_label(label)
+            ax_spec = fig.add_subplot(grid[2 * idx, 0])
+            ax_energy = fig.add_subplot(grid[2 * idx, 1])
             ax_spec.plot(freq_norm[1:], spec_mean[1:], color="tab:blue")
             ax_energy.plot(time_norm, energy_mean, color="tab:orange")
             ax_spec.set_yscale("log")
             ax_energy.set_yscale("log")
             ax_spec.set_ylabel("Spectral Density (normalised)")
             ax_energy.set_ylabel("Energy Density (normalised)")
-            ax_spec.set_title(f"{label} | Spectral")
-            ax_energy.set_title(f"{label} | Energy")
+            ax_spec.set_title(f"{label_display} | Spectral")
+            ax_energy.set_title(f"{label_display} | Temporal")
             if idx == nrows - 1:
                 ax_spec.set_xlabel("Normalized Frequency")
                 ax_energy.set_xlabel("Normalized Time")
             else:
                 ax_spec.set_xlabel("")
                 ax_energy.set_xlabel("")
-        plt.tight_layout()
-        plt.savefig(out_combined, dpi=300)
-        plt.close()
+            ax_spec.tick_params(axis="x", labelbottom=True)
+            ax_energy.tick_params(axis="x", labelbottom=True)
+
+            ax_label_left = fig.add_subplot(grid[2 * idx + 1, 0])
+            ax_label_right = fig.add_subplot(grid[2 * idx + 1, 1])
+            ax_label_left.axis("off")
+            ax_label_right.axis("off")
+            ax_label_left.text(0.5, 0.45, labels[2 * idx], ha="center", va="center", fontsize=12, fontweight="bold")
+            ax_label_right.text(0.5, 0.45, labels[2 * idx + 1], ha="center", va="center", fontsize=12, fontweight="bold")
+
+        fig.subplots_adjust(top=0.965, bottom=0.03)
+        fig.savefig(out_combined, dpi=300)
+        plt.close(fig)
     else:
         ncols = 2 if args.combined_layout == "horizontal" else 1
         nrows = 1 if args.combined_layout == "horizontal" else 2
         figsize = (8.0, 3.0) if args.combined_layout == "horizontal" else (4.0, 6.0)
         fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=figsize, squeeze=False)
         ax_spec = axes[0, 0]
-        for d in data_dirs:
-            freq_norm, spec_mean, _, _, label = _compute_density(d, args.split)
-            ax_spec.plot(freq_norm[1:], spec_mean[1:], label=label)
+        for freq_norm, spec_mean, _, _, label in results:
+            ax_spec.plot(freq_norm[1:], spec_mean[1:], label=_display_label(label))
         ax_spec.set_yscale("log")
         ax_spec.set_xlabel("Normalized Frequency")
         ax_spec.set_ylabel("Spectral Density (normalised)")
         ax_spec.legend(title="Dataset")
 
         ax_energy = axes[0, 1] if args.combined_layout == "horizontal" else axes[1, 0]
-        for d in data_dirs:
-            _, _, time_norm, energy_mean, label = _compute_density(d, args.split)
-            ax_energy.plot(time_norm, energy_mean, label=label)
+        for _, _, time_norm, energy_mean, label in results:
+            ax_energy.plot(time_norm, energy_mean, label=_display_label(label))
         ax_energy.set_yscale("log")
         ax_energy.set_xlabel("Normalized Time")
         ax_energy.set_ylabel("Energy Density (normalised)")
@@ -235,6 +282,31 @@ def main() -> None:
         plt.tight_layout()
         plt.savefig(out_combined, dpi=300)
         plt.close()
+
+    # Per-dataset figures
+    if args.per_dataset_dir is not None:
+        per_dir = args.per_dataset_dir.expanduser().resolve()
+        per_dir.mkdir(parents=True, exist_ok=True)
+        for freq_norm, spec_mean, time_norm, energy_mean, label in results:
+            label_display = _display_label(label)
+            safe_label = label.replace("/", "_")
+            fig, (ax_spec, ax_energy) = plt.subplots(nrows=1, ncols=2, figsize=(8.0, 3.0), squeeze=True)
+            ax_spec.plot(freq_norm[1:], spec_mean[1:], color="tab:blue")
+            ax_energy.plot(time_norm, energy_mean, color="tab:orange")
+            ax_spec.set_yscale("log")
+            ax_energy.set_yscale("log")
+            ax_spec.set_xlabel("Normalized Frequency")
+            ax_spec.set_ylabel("Spectral Density (normalised)")
+            ax_energy.set_xlabel("Normalized Time")
+            ax_energy.set_ylabel("Energy Density (normalised)")
+            ax_spec.set_title(f"{label_display} | Spectral")
+            ax_energy.set_title(f"{label_display} | Temporal")
+            plt.tight_layout()
+            per_path = per_dir / f"{safe_label}_{args.split}_spectrum_energy.png"
+            per_path = per_path.with_suffix(f".{fmt}")
+            plt.savefig(per_path, dpi=300)
+            plt.close()
+            print(f"[INFO] Saved per-dataset figure for {label} to {per_path}")
 
     print(f"[INFO] Saved spectral density plot to {out_spec}")
     print(f"[INFO] Saved time-domain energy plot to {out_energy}")
