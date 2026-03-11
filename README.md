@@ -1,6 +1,5 @@
-# Conditional Fourier Diffusion
-
-This repository contains the experiments used in our paper on sliding-window covariance estimation. This is a minimal public subset; datasets and generated assets are not included. For step-by-step reproduction, start with `notebooks/reproduce_thesis.ipynb` and use `notebooks/paper.ipynb` as the full command log.
+This repository contains the experiments used in our paper on covariance estimation with CDSM. 
+For step-by-step reproduction, start with `notebooks/reproduce_experiment.ipynb` and use `notebooks/paper.ipynb` as the full command log.
 
 ## 1. Environment Setup
 
