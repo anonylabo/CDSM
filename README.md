@@ -1,5 +1,5 @@
-This repository contains the experiments used in our paper on covariance estimation with CDSM. 
-For step-by-step reproduction, start with `notebooks/reproduce_experiment.ipynb` and use `notebooks/paper.ipynb` as the full command log.
+This repository contains the code for running CDSM for covariance estimation.
+For step-by-step reproduction of the experiments, start with `notebooks/reproduce_experiment.ipynb` and use `notebooks/paper.ipynb` as the full command log.
 
 ## 1. Environment Setup
 
